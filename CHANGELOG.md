@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.1.0]
+
 - 記下 foundation 的同步點（`.foundation.json`），之後可以用 `sync-foundation` 帶進骨架的更新。
 
 ## [0.0.0]
