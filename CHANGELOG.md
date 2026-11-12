@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- 記下 foundation 的同步點（`.foundation.json`），之後可以用 `sync-foundation` 帶進骨架的更新。
+
 ## [0.0.0]
 
 - 專案初始化：FastAPI + Next.js 全端骨架，含登入、使用者與角色權限、背景任務與排程、中英雙語。
