@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+- 修正後台管理使用者的安全問題：帳號身上停用的角色也算進管理資格（避免角色恢復後被低權限管理者接管）；
+  停用帳號時登入版本由資料庫遞增，不會讓已撤銷的登入恢復；重設密碼在寫入前再確認一次能不能管理對方。
+- `make db superuser`、`make db revoke-sessions` 不再在終端機印出 AUDIT 的 log，紀錄照樣寫進 `audit_logs`。
+
 ## [0.2.0]
 
 - `.env` 的 `API_WORKERS` 改名為 `API_PROCESSES`；api 的記憶體上限依行程數自動調整（1 個 512M，每多一個加 256M）。
