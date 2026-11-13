@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+- `.env` 的 `API_WORKERS` 改名為 `API_PROCESSES`；api 的記憶體上限依行程數自動調整（1 個 512M，每多一個加 256M）。
+  **部署前主機的 `.env` 要照樣改名**，沒改時用預設的 1 個行程。
+- 新增 `WORKER_REPLICAS`（預設 1）可以開多份 worker 並行處理任務；`API_PROCESSES` 與 `WORKER_REPLICAS`
+  加起來最多 6，超過時 `make start` 拒絕啟動。
+- worker 的容器名稱變成 `<專案>-worker-<序號>`（例如 `project-test-worker-1`），升級時舊的 `<專案>-worker` 會被移除。
+- 背景任務的時間上限最多 300 秒，`JobSpec(timeout_seconds=...)` 超過時 worker 啟動就報錯。
+
 ## [0.1.1]
 
 - 修正部署：主機上的部署腳本不再被中途的指令讀走，備份、切換版本、清理舊映像檔與舊備份每一步都會執行。
