@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.0]
+
 - `.env` 的 `API_WORKERS` 改名為 `API_PROCESSES`；api 的記憶體上限依行程數自動調整（1 個 512M，每多一個加 256M）。
   **部署前主機的 `.env` 要照樣改名**，沒改時用預設的 1 個行程。
 - 新增 `WORKER_REPLICAS`（預設 1）可以開多份 worker 並行處理任務；`API_PROCESSES` 與 `WORKER_REPLICAS`
