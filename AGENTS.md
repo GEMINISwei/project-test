@@ -34,6 +34,8 @@
 12. **已經發版的 migration 不可修改或刪除**；model 與 migration 要一致。
 13. **新增的抑制註解同一行要寫理由**（`# noqa`、`# type: ignore`、`eslint-disable`、跳過測試）。
 14. **skills 只放 `.agents/skills/`，hook 的邏輯只放 `.agents/hooks/`**，兩家的設定要一致。
+15. **每條 API 路由都宣告權限**：用 `require(...)`，不需要登入的標 `dependencies=[Depends(public())]`；
+    E2E 的 spec 一律從 `support` 匯入 `test`（[執行期契約](docs/foundation/testing.md#執行期契約)）。
 
 ## 漏了不會報錯的地方
 
@@ -41,52 +43,76 @@
 
 - **瀏覽器不直接呼叫後端**。要從畫面寫入時，在模組的 `actions.ts` 包一層具名、窄介面的 Server Action；
   不要在 nginx 或 Next 加 `/api/` 的轉送，也不要在 `shared/api/client.server.ts` 加 `"use server"`。
+  E2E 抓得到瀏覽器打 `/api/` 的請求，抓不到換了路徑的轉送。
 - **Server Action 的回傳值會送進瀏覽器**：寫入登入 cookie 的 action 回傳前要經過 `withoutData`。
+  E2E 走過的 action 會檢查回應裡有沒有 cookie 或密碼。
 - **不用 `NEXT_PUBLIC_*` 放設定**（建置時就固定了），執行期設定走 `shared/runtime/`。
 - **`apps/web/proxy.ts` 留在原位**：放錯位置 Next 照樣建置成功，路由保護卻整層消失。
-- **畫面上的權限判斷只是體驗**，每個後端端點都要用 `require(...)` 宣告權限。
+- **畫面上的權限判斷只是體驗**，真正的檢查在後端的 `require(...)`。
 - **後台的寫入要守住三條防提權的規則**（不授予自己沒有的權限、不管理權限比自己高的帳號、不改自己的角色與狀態），
   新增會改到帳號或角色的功能時比照 `modules/users/service.py`。
 - **AUDIT、log 與任務的 payload 只放 id 與固定的代碼**，不放帳號、暱稱或使用者輸入的內容。
+  `make e2e check` 會掃描 E2E 用過的值，E2E 沒走到的路徑掃不到。
 - **背景任務必須能重跑**；任務名稱不要改。
 - **上傳的檔案存在 `/app/uploads/<模組>/`**：存到別的路徑，重建容器就消失，也備份不到。
-- **schema、路由函式與 enum 的 docstring 會進公開的 API 契約**，內部說明寫在一般註解。
+  `make e2e check` 會列出 E2E 期間寫在 volume 以外的檔案。
+- **schema、路由函式與 enum 的 docstring 會進公開的 API 契約**，不放內部說明。
 - **主機的 reverse proxy 在 repo 之外**：它要覆寫 `X-Real-IP` 與 `X-Forwarded-Proto`，少了不會報錯
   （[說明](docs/foundation/operations.md#主機的-reverse-proxy)）。
 - **compose 的旗標不要自己組**，一律經過 `tools/compose.py`。
 - **`docs/foundation/` 與基礎建設歸 foundation**（[檔案歸誰](docs/foundation/workflow.md#檔案歸誰)）：在子專案裡改了，
   下次同步就會衝突。專案自己的說明與決定寫在 `docs/project/`，基礎建設的修正先回到 foundation。
 
-## 高風險先問
+## 授權界線
 
-檢查擋不完所有寫法，hook 只擋常見的那幾種。下列情況先停下來說明要做什麼、為什麼，等使用者同意；
-沒列到但你判斷同樣危險的，也照辦：
+做錯了 CI 或審查抓得到、revert 就能復原的，自己處理；決定使用者的意圖、不可逆、會讓保證變弱或讓 agent 的權限變大的，
+由使用者決定。hook 只擋常見的那幾種寫法，沒被擋下不代表可以做。
 
-- 不可逆或影響 repo 以外的動作：部署、發布、合併、刪資料或分支、動主機、改別的 repo、送出外部服務
-- 改防線檔案（hook、agent 設定、CI、檢查的設定與入口）
-- 實作開始後改測試、放寬斷言、加抑制註解或跳過測試
+**自己處理，不用問**：
+
+- 需求明確時整理驗收條件、寫測試與實作、開 Draft PR
+- 新增測試檔、在既有的測試檔加新的案例與輔助程式
+- 讀 CI 的錯誤、修正、push 工作分支，直到全綠
+- commit、更新 PR 描述、自審、轉 Ready for review
+- 被 hook 或檢查擋下後改做法、縮小改動（不是換個寫法做同一件事）
+
+**先停下來說明要做什麼、為什麼，等使用者同意**；沒列到但你判斷同樣危險的，也照辦：
+
+- 意圖還沒定：產品行為、權限的取捨、資料怎麼處理，或需求有兩種以上合理的解讀
 - 超出驗收條件的範圍
+- 讓保證變弱：改或刪既有測試的程式碼、放寬斷言、跳過測試、加抑制註解、降低門檻
+- 改防線檔案（hook、agent 設定、CI、檢查的設定與入口）
+- 不可逆或影響 repo 以外的動作：部署、發布、刪資料或分支、動主機、改別的 repo、送出外部服務
 - 升級相依：先在乾淨的環境實際安裝並跑過檢查，確認整組相容；有不相容的要告知並提出替代方案
-- 想換個寫法避開被 hook 或檢查擋下的動作
+- 還有開著的 PR 時插隊開分支（`feature-workflow`〈插隊〉）
 
-被 hook 擋下時照它給的理由做。**測試檔與防線檔案**：在對話訊息裡一次列出所有要改的檔案，每個寫原因與怎麼改
-（簡短即可），**最後才問一句是否全部同意**。清單不要塞進詢問視窗：項目一多會顯示不完，使用者看不到就無法判斷。
-同意後執行一次 `python3 .agents/hooks/approve.py <test|protected> <檔案…>`
-（[說明](docs/foundation/hooks-and-skills.md#測試鎖)）。
+**不做**：
+
+- 合併 PR（由使用者做）、直接 push `main`
+- 繞過檢查（`--no-verify`、改 `core.hooksPath`），或為了通過而停用檢查
+- 自己寫放行紀錄，或換個寫法完成被 hook 擋下的同一個動作
+
+**同意的效力跟著任務的範圍，不跟著修了幾輪**。範圍以 Draft PR「驗證」段的驗收條件為準：同一個任務、目的與範圍內，
+同意過的不再問，CI 修幾輪、審查退回幾次都一樣；也不因為修了很多輪就順手做範圍外的事。
+目標環境、受影響的資料或風險變了（例如從補測試變成要放寬斷言）才重新問。
+
+被 hook 擋下時照它給的理由做。**要改既有的測試與防線檔案**：在對話訊息裡一次列出所有檔案與原因，最後才問一句是否全部同意，
+同意後執行一次 `approve.py`（[流程](docs/foundation/testing.md#改程式不改測試)）。
 
 ## 寫程式
 
-- **流程：Feature Branch → Draft PR → Incremental Commits → Code Review → Squash Merge**。不直接 push `main`；
-  PR 標題用 Conventional Commits。照 `feature-workflow` skill 做。
-- **一次只有一個進行中的 PR**；要插隊照 `hotfix` skill 先問使用者。
-- **PR 描述固定三段：摘要、驗證、檢查**。`gh pr create --body` 會跳過模板，自己帶內文時也照這三段。
-- **每個 commit 最後加 `Co-authored-by: <產品> <模型與版本> <email>`**，不用 `--no-verify` 繞過檢查。
-- **動手前把驗收條件寫進 Draft PR 的「驗證」段，每條對應一個測試名稱，列給使用者確認之後才開始寫測試**。
-- **先寫測試，寫好才開始實作**；測試變紅時預設它是對的，改實作讓它變綠。
+- **要進 `main` 的改動照 `feature-workflow` skill**（Feature Branch → Draft PR → Incremental Commits → Code Review →
+  Squash Merge）：驗收條件寫進 Draft PR 的「驗證」段，每條有對應的驗證方式，改了行為的就是測試名稱
+  （[說明](docs/foundation/testing.md#驗收條件與驗證方式)）。新行為與 bug 修正先寫測試再實作。
+- **一次只有一個進行中的 PR**；要插隊照 `feature-workflow`〈插隊〉先問使用者。
+- **每個 commit 最後加 `Co-authored-by: <產品> <模型與版本> <email>`**。
+- **測試變紅時預設它是對的**，改實作讓它變綠。
 - **測試放該 app 的 `tests/`，與原始碼同構**。`actions.ts` 與 `ui/*.tsx` 不寫執行期測試，
   畫面的分支抽進 `capabilities.ts` 再測。不要為了覆蓋率數字補測試。
-- **程式碼要簡潔**：不加用不到的抽象、設定或參數；少量重複不急著抽成共用。
-- **註解寫為什麼，不寫做了什麼**；程式碼裡的註解用半形標點，字串與 Markdown 用全形。
+- **優先讓程式碼自行表達意圖**；必要的註解簡短說明原因或限制（[說明](docs/foundation/development.md#註解與文件)）。
+- **參考既有寫法時，先確認情境適用**：避免直接沿用別處的特殊處理。
+- **單次的糾正留在當下的任務**；要成為長期規則時，寫得成檢查就寫成檢查，寫不成的記進文件並寫明理由。
+- 程式碼裡的註解用半形標點，字串與 Markdown 用全形。
 - **CSS 只用設計變數**，不寫死色值或尺寸。
 - 一個任務交給一個 agent；不要兩個 agent 同時改同一個分支。
 
@@ -94,7 +120,7 @@
 
 | 改了什麼 | 要做 |
 |---|---|
-| 任何程式碼 | push，照 `watch-pr` 等 CI。完整的檢查只在 CI 跑；寫測試時只跑那一項確認紅燈 |
+| 任何程式碼 | 本機依影響範圍跑需要的 `make check <項目>`；push 後照 `watch-pr` 等 CI，合併只認 CI |
 | model 的欄位、索引、約束 | 照 `add-migration`：`make db migration "說明"`，讀過產出 |
 | 跟資料庫互動的後端程式 | `make check integration <測試檔>` |
 | 登入、導向、權限、cookie | `make e2e up` 後 `make e2e test <檔案>` |

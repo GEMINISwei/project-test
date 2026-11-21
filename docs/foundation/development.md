@@ -7,7 +7,7 @@
 
 ```bash
 make init dev   # 產生 .env、安裝三處的相依 (apps/api、apps/web、e2e)、啟用 git hook
-make start      # 啟動 postgres → migrate → api、worker → web → nginx
+make start      # 啟動 postgres → migrate → api、worker → web, 都就緒才啟動 nginx
 make db superuser
 ```
 
@@ -19,7 +19,7 @@ make db superuser
 
 ```bash
 make doctor          # 一次列出版本、設定、各服務狀態的問題
-make status          # 各容器的狀態
+make status          # 這個專案在 Docker 上的 container 與 volume
 make logs api        # 看某個服務的 log
 ```
 
@@ -39,30 +39,26 @@ make logs api        # 看某個服務的 log
 
 ## 指令
 
-`make help` 列出全部，`make <指令> help` 看子指令。實作在 `tools/`（Python 標準函式庫）。
+`make help` 依目前的狀態列出用得到的指令：還沒有 `.env` 時只有 `init`，正式環境不列開發用的
+（`check`、`gen-types`、`e2e`、`release`，下了也會被拒絕）。`make <指令> help` 看子指令。實作在 `tools/`
+（Python 標準函式庫）。`make pipeline` 是給部署流程呼叫的，不列在 help 裡。
 
 | 指令 | 用途 |
 |---|---|
 | `make init dev\|prod` | 產生 `.env`、檢查環境；`dev` 另外安裝相依 |
-| `make start`、`make stop`、`make status` | 啟動、停止、狀態 |
+| `make start`、`make stop` | 啟動、停止 |
+| `make status`、`make status volumes` | Docker 上的 container 與 volume；各 volume 的容量 |
 | `make logs [服務]`、`make logs trace <id>`、`make logs errors [分鐘]` | 看 log、追一次請求、列出最近的錯誤 |
 | `make doctor` | 檢查這台機器與執行中的服務 |
 | `make db psql\|superuser\|revoke-sessions\|migration\|reset` | 資料庫與帳號 |
 | `make jobs list\|retry\|run` | 背景任務 |
 | `make backup`、`make backup restore db\|uploads` | 備份與還原 |
-| `make check <項目>` | 檢查與測試的單項（完整的檢查在 CI） |
+| `make check <項目>` | 檢查與測試的單項（依影響範圍在本機跑；合併只認 CI） |
 | `make e2e up\|test\|grep\|down\|check` | 瀏覽器測試 |
 | `make gen-types` | 重新產生契約與前端型別 |
 | `make release <版號>` | 準備發版 |
 
-改完之後要做什麼：
-
-| 改了什麼 | 要做 |
-|---|---|
-| 後端的 schema、路由、權限、語系 | `make gen-types`，兩份產出一起 commit |
-| model 的欄位、索引、約束 | `make db migration "說明"`，讀過產出 |
-| 登入、導向、權限、cookie | `make e2e up` 後 `make e2e test <檔案>` |
-| 行為有變 | `CHANGELOG.md` 的 `[Unreleased]` 留一筆 |
+改完之後要做什麼見 [`AGENTS.md`](../../AGENTS.md)〈改完之後〉。
 
 ## 程式碼風格
 
@@ -72,19 +68,40 @@ make logs api        # 看某個服務的 log
 
 ### 註解與文件
 
-- 註解寫**為什麼**，不寫做了什麼；看程式碼就知道的不寫。演進過程寫進 commit 訊息。
+優先讓程式碼自行表達意圖：命名、型別與測試名稱說得清楚的，不另外寫註解。必要的註解簡短說明程式碼讀不出來的
+原因或限制，例如刻意不重試、交易的順序、外部系統的行為：
+
+```python
+# 重試會讓同一個 refresh token 被用兩次
+```
+
+- 參考既有寫法時，先確認情境適用。附近的程式碼是主要的範本；寫了原因的地方多半是特殊處理，條件一致才沿用。
+- schema、路由函式與 enum 的 docstring 會進公開的 API 契約（`contracts/openapi.json`），只寫給呼叫端看的說明。
+- 演進過程寫進 commit 訊息。
 - 程式碼裡的註解與 docstring 用半形標點（`, : ; ( )`）；字串與 Markdown 維持全形。
 - 事件名稱（log 的 `event`、AUDIT 的事件、錯誤代碼）用固定的英文代碼，變動的值放欄位。
+
+### 審查證據
+
+審查看整份 diff，CI 產生的證據協助判斷哪裡要特別看，不採用 agent 自己描述的結果。CI 把要看的東西寫進 Job summary，
+沒有要看的項目時只有一行：
+
+| 來源 | 列出 |
+|---|---|
+| `pr` job | 沒過的項目、新增的抑制註解、改掉既有內容的測試檔、動到的防線檔案 |
+| `CI` 的 `e2e` | 沒通過的 E2E 測試；報告與每個測試的截圖上傳成 artifact（保留 7 天），連結在摘要裡；沒通過的[執行期契約](testing.md#執行期契約) |
+| `CI` 的 `ci-gate` | 沒過的 job 與結果 |
 
 ### 抑制註解
 
 `# noqa`、`# type: ignore`、`eslint-disable`、`@ts-expect-error`、跳過測試，**同一行要寫理由**：
 
 ```python
-token_type: str = "bearer"  # noqa: S105 — 憑證的種類, 不是密碼
+token_type: str = "bearer"  # noqa: S105  # 憑證的種類, 不是密碼
 ```
 
-CI 的 `pr` 會檢查這個 PR 新增的抑制註解（`.github/scripts/check-pr-changes.py`）。
+Python 的理由寫在抑制註解後面的另一個 `#` 之後，ESLint 用 `-- 理由`。CI 的 `pr` 會檢查這個 PR 新增的
+抑制註解（`.github/scripts/check-pr-changes.py`），格式不對會被擋下。
 
 ### 相依版本
 
