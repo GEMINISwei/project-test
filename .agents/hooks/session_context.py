@@ -66,12 +66,11 @@ def context(root: Path) -> str:
     if implementation_started(root):
         approved = sorted(approvals.approved(root, "test"))
         note = f"，已放行：{'、'.join(approved)}" if approved else ""
-        lines.append(f"- 實作已經開始：改測試檔要先經過使用者同意{note}")
+        lines.append(
+            f"- 實作已經開始：改或刪既有的測試要先經過使用者同意，新增測試可以直接做{note}"
+        )
     else:
         lines.append("- 實作還沒開始（測試檔還沒鎖定）")
-    branches = sorted(approvals.approved(root, "branch"))
-    if branches:
-        lines.append(f"- 使用者同意插隊的分支：{'、'.join(branches)}")
     return "\n".join(lines)
 
 

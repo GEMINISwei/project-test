@@ -36,10 +36,13 @@
 
    `committed` 是那次請求的寫入最後有沒有成立：`role_updated` 配上 `false` 代表有人試過，但資料沒有變。
 
+   `audit_logs` 不會自動清理：紀錄刻意完整保留。資料量大到影響備份時，再依 `created_at` 刪掉舊的。
+
    拿到 `request_id` 再用 `make logs trace` 看那次請求的完整經過。
 
 log 的格式：api 與 worker 在正式環境是一行一筆 JSON（`event`、`level`、`request_id`、`user_id`…），
-web 伺服器端的錯誤與**瀏覽器端沒被接住的錯誤**（`event: client_error`）也是同樣的格式；nginx 的 access log
+web 伺服器端的錯誤與**瀏覽器端沒被接住的錯誤**（`event: client_error`）也是同樣的格式，這類回報有每分鐘的上限，
+超過的不記錄，只在那一分鐘結束時留一行 `client_error_dropped` 與筆數；nginx 的 access log
 每行帶 `[request id]`。時間一律 UTC。
 
 | 現象 | 先看 |
@@ -47,7 +50,7 @@ web 伺服器端的錯誤與**瀏覽器端沒被接住的錯誤**（`event: clie
 | 整站打不開 | `make status`、`make doctor`；主機的 reverse proxy |
 | 啟動後 api 起不來 | `make logs migrate`（migration 或初始資料失敗）、`make logs api`（設定缺漏會列出是哪幾項） |
 | 某個操作失敗 | 錯誤訊息裡的 request id → `make logs trace` |
-| 登入被擋（429） | 限流：同一個 IP 加帳號 5 分鐘 10 次。所有人都被擋時檢查主機有沒有送 `X-Real-IP` |
+| 登入被擋（429） | 限流：同一個 IP 加帳號 5 分鐘 10 次，同一個 IP 不分帳號 5 分鐘 50 次（共用出口 IP 的辦公室會一起算）。所有人都被擋時檢查主機有沒有送 `X-Real-IP` |
 | 排程沒有執行 | `make logs worker`、`make jobs list`；手動觸發 `make jobs run <任務名稱>` |
 | 服務週期性重啟，或 api 的行程反覆被補回來 | 記憶體上限（[正式環境的上限](#擴充)）：`docker inspect --format '{{.State.OOMKilled}}' <容器>` 是 `true` 就是被 OOM kill，`docker stats` 看當下用量。api 開多個行程時被 kill 的只有其中一個行程，容器不會重啟，log 裡會看到行程重新啟動 |
 
@@ -61,11 +64,6 @@ web 伺服器端的錯誤與**瀏覽器端沒被接住的錯誤**（`event: clie
   （`/etc/systemd/journald.conf` 的 `SystemMaxUse`）。
 - `json-file`：log 跟著容器走，每個服務最多 5 個 20MB 的檔案，**重建容器（每次部署）後舊的就消失**。
   部署前的備份會留一份當下的 log（`backups/*.logs.tar.gz`）。
-
-### 錯誤追蹤
-
-預設不送任何資料到第三方。要主動收到錯誤通知時，在 `.env` 設 `SENTRY_DSN`（Sentry 或相容的自架 GlitchTip），
-api 與 worker 的 error 等級以上的 log 會成為事件；不會帶使用者的 IP、cookie 或請求內容。
 
 ## 正式環境
 
@@ -87,9 +85,10 @@ make db superuser
   2. **進入維護狀態**：停掉對外入口與舊版的 web、api、worker，等進行中的請求與任務做完
      （api 最多等 30 秒，worker 最多等 330 秒）。新舊程式不會同時服務。
   3. 跑 migration。
-  4. 啟動新版，等每個服務的健康檢查通過，再從入口實際打一次（最多等 3 分鐘）。
+  4. 啟動新版：入口以外的服務先起來，全部通過健康檢查（最多等 3 分鐘）才啟動入口，再從入口實際打一次。
 - **第 3、4 步失敗時指令會以失敗結束，對外入口維持關閉**：寧可停在維護狀態，也不讓不確定的版本接流量。
   看 `make logs errors` 找原因，修正後重新 `make start`；要退回上一版見〈回滾與 migration〉。
+  主機重開機或 Docker 重啟之後，被停下的服務也維持停止，不會自己接回流量。
 - **每次部署會中斷服務**，從第 2 步到第 4 步結束，通常幾十秒；手上有長任務時要多等它做完。挑離峰時段。
 - `MODE=production` 時會拒絕 `make db reset`、`make db migration`、`make check`、`make e2e`、
   `make gen-types`、`make release`。防的是手誤，不是權限控制。
@@ -140,6 +139,9 @@ compose 裡的 nginx **一定在主機的 reverse proxy 後面**：
 - 沒送 `X-Forwarded-Proto` → cookie 不帶 `Secure`。
 - `client_max_body_size` 沒設 → 超過 1MB 的上傳在主機就被擋下。
 
+在主機上跑 `make doctor` 會讀 `/etc/nginx` 的設定檔，找出轉送到這套系統 port 的那一段，列出缺少的項目與憑證還剩幾天
+（「Nginx 相關」那一區）。它讀的是檔案：改了還沒 reload 時看到的是新內容；寫法特殊（具名的 `upstream`）時會顯示找不到。
+
 容器 nginx 信任上一層的前提是**外部連不到它**。把 port 改綁 `0.0.0.0` 的話任何人都能自帶 `X-Real-IP` 冒充別人，
 而且 Docker 直接改 iptables，ufw 擋不住。`make check lint` 會檢查綁定位址與每個轉送的 location 都有覆寫標頭。
 
@@ -179,9 +181,9 @@ Ubuntu 24.04 內建的 nginx 是 1.24，`example.conf` 的 `listen 443 ssl http2
 
 Variable 沒設定或列出的組找不到 environment，這次就一套都不部署並說明原因。
 
-每次部署：確認 tag 等於 `v<APP_VERSION>` → 確認這個 commit 在 `main` 的 CI 通過（沒有就先跑）→
+每次部署：確認 tag 等於 `v<APP_VERSION>`、指向的 commit 在 `main` 上 → 確認它在 `main` 的 CI 通過（沒有就先跑）→
 逐套確認資料庫不會往回（見〈[回滾與 migration](#回滾與-migration)〉）→ 建兩份映像檔推到 GHCR →
-**一次一套**依序部署：SSH 到主機 → `make backup allow-fresh` → checkout 同一個 tag → 依 digest 拉映像檔並
+**一次一套**依序部署：SSH 到主機 → `make pipeline backup` → checkout 同一個 tag → 依 digest 拉映像檔並
 `make start` → `make status` → 清掉舊映像檔與過舊的備份。一套失敗不會中斷其他套；失敗的 job 會標出停在哪一步，
 修好之後 Re-run failed jobs。
 
@@ -262,19 +264,27 @@ make db revoke-sessions   # 讓所有人立刻登出 (懷疑登入憑證外流�
 ```bash
 make backup                          # 資料庫、上傳的檔案與當下的 log, 存在 backups/
 make backup prune 10                 # 只保留最近 10 組
+make backup restore all [檔案]       # 一次還原同一組的資料庫與上傳的檔案 (檔案給 .dump 那一份)
 make backup restore db [檔案]        # 還原資料庫; 不給檔案就列出這個版本的備份讓你選
 make backup restore uploads [檔案]   # 還原上傳的檔案
 ```
 
 - 一次備份是一組共用檔名的檔案：`<專案>_v<版號>_<日期>_<時間>.dump`、`.tar`、`.logs.tar.gz`。
-- **備份期間停掉所有會寫資料的來源**（對外入口與 worker，等進行中的請求與任務做完），資料庫與檔案才是
+- **備份期間停掉所有會寫資料的服務**（對外入口、web、api 與 worker，等進行中的請求與任務做完），資料庫與檔案才是
   同一個時間點；完成或失敗都會開回來。資料庫與上傳的檔案都成功才留下這一組，不會有只有一半的備份。
-- **還原前一定先完整備份一次**；這次備份失敗就不還原。
-- **還原期間 web、api 也會停掉**。還原是整批成立或整批不成立：資料庫包在一個交易裡，上傳的檔案先完整
-  解開才換上去，所以備份檔壞掉時原本的資料還在。
+- **還原前一定先完整備份一次**。目前的資料壞到匯不出來時，改成停下資料庫、把資料目錄原封不動複製一份
+  （`backups/*.pgdata.tar`，`make backup prune` 不會清掉它）再還原：最需要還原的時候不會被擋住，壞掉之前的
+  原始資料也留著。要用那一份時，停下 postgres，把內容解回資料 volume。
+- **還原是整批成立或整批不成立**：資料庫包在一個交易裡，上傳的檔案先完整
+  解開才換上去，所以備份檔壞掉時原本的資料還在；換到一半機器當掉，下一次還原會先把原本的檔案放回去。
 - **還原失敗時服務維持停止，不會自動接回流量**：先看錯誤訊息確認資料的狀態，再 `make start`。
 - **資料庫只接受目前版本的備份**：別版的結構可能跟目前的程式對不上，要還原別版就先部署回那一版。
-- 上傳的檔案任何版本的備份都能還原。資料庫的紀錄會指到上傳的檔案，兩邊要還原同一組：
-  還原完一邊，指令會印出同一組另一半的還原指令。
-- 備份留在主機上不算備份：把 `backups/` 同步到別的地方，並定期做還原演練。
+- 上傳的檔案任何版本的備份都能還原。資料庫的紀錄會指到上傳的檔案，兩邊要還原同一組：整個系統要退回
+  某個時間點時用 `restore all`，兩邊在同一次停機裡換完；只還原一邊時，指令會印出同一組另一半的還原指令。
+- **還原資料庫之後所有人都要重新登入**：還原會讓登入的版本倒退，已經撤銷的登入憑證會再次有效，所以
+  還原時在同一個交易裡讓還原前簽發的憑證全部失效（中途中斷再重試也一樣）。還原前的資料庫讀不出來時做不到這件事，指令會提醒換掉
+  `JWT_SECRET_KEY`（見〈[帳號](#帳號)〉）。
+- `backups/` 只有執行備份的帳號進得去：備份檔裡有密碼雜湊與 AUDIT。
+- 備份留在主機上不算備份：把 `backups/` 同步到別的地方，並定期做還原演練。CI 每次都會對拋棄式的環境
+  實際備份再還原一次（`make e2e check`），驗的是流程還能用；主機上那一份備份能不能還原，要靠演練。
 - 上傳的檔案一律存在 api 容器的 `/app/uploads/<模組>/`：存到別的路徑，重建容器就消失，也備份不到。

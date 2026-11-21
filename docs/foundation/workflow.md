@@ -3,7 +3,7 @@
 ## 為什麼這樣設計
 
 - **`main` 只透過 PR 前進，一律 squash**：`main` 一個 PR 一個 commit，PR 標題就是 commit 標題。
-- **先開 Draft PR 寫驗收條件**：方向錯了在寫程式前就看得到。
+- **先開 Draft PR 寫驗收條件**：方向錯了在寫程式前就看得到；它也是這個任務的範圍，修幾輪都以它為準。
 - **一次一個 PR**：一次審一件事，diff 才小得好讀，也不會建立在沒審過的程式上。
 - **GitHub 端用 ruleset 擋**：流程不能靠自覺。
 - **AI 的 commit 寫明模型與版本**：追問題時要分得出是誰做的。
@@ -17,17 +17,18 @@ Feature Branch → Draft PR → Incremental Commits → Code Review → Squash M
 1. **Feature Branch**：從最新的 `main` 開 `<type>/<kebab-case>`（`feat/product-list`）。一個分支只做一件事。
 2. **Draft PR**：第一次 push 就開 Draft PR，描述固定三段（[模板](../../.github/PULL_REQUEST_TEMPLATE.md)）：
    - **摘要**：改了什麼、為什麼。推新 commit 時回來補。
-   - **驗證**：[驗收條件](testing.md#驗收條件與測試名稱)與結果，成功失敗都寫。
+   - **驗證**：[驗收條件](testing.md#驗收條件與驗證方式)與結果，成功失敗都寫。
    - **檢查**：diff 看不出、要審查者去確認的事。
-3. **Incremental Commits**：一個 commit 一個說得清楚的步驟（先測試、再實作、再整理）。
-4. **Code Review**：CI 綠、「驗證」寫完、整份 diff 自己讀過才按 Ready for review。回應意見用新的 commit，不 force push。
-5. **Squash Merge**：合併後刪分支。
+3. **Incremental Commits**：一個 commit 一個說得清楚的步驟。新行為與修正先測試、再實作；重構與設定依工作性質安排。
+4. **Code Review**：CI 綠、「驗證」寫完、整份 diff 自己讀過才轉 Ready for review（AI agent 自審後自己轉）。
+   回應意見用新的 commit，不 force push。
+5. **Squash Merge**：由使用者合併，合併後刪分支。
 
 ### 一次一個 PR
 
 前一個 PR 合併（或關閉）後才開下一個分支。等合併時可以討論下一件事，但不開分支、不動檔案。
-正式環境出問題等不及時，由使用者決定要不要插隊（AI agent 照 `hotfix` skill）。
-agent 這一側由 hook 確認（[說明](hooks-and-skills.md#一次一個-pr)）；Dependabot 的 PR 不算。
+正式環境出問題等不及時，由使用者決定要不要插隊（AI agent 照 `feature-workflow`〈插隊〉）。
+這是工作規則，hook 不擋；開新 session 時 SessionStart 會列出開著的 PR 提醒 agent。Dependabot 的 PR 不算。
 
 ### GitHub 設定
 

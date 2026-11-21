@@ -23,6 +23,8 @@ import re
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from tools.contract import CONTRACT, EXPORT_ENV, WEB_SCHEMA, generate
@@ -32,7 +34,7 @@ USAGE = (__doc__ or "").split("\n\n")[1]
 API = REPO_ROOT / "apps/api"
 WEB = REPO_ROOT / "apps/web"
 COMPOSE_DIR = REPO_ROOT / "infra/compose"
-POSTGRES_IMAGE = "postgres:18.6-alpine"
+POSTGRES_IMAGE = "postgres:18.7-alpine"
 
 
 def sh(*command: str, cwd: Path = REPO_ROOT, env: dict[str, str] | None = None) -> None:
@@ -198,37 +200,19 @@ def run_migrations() -> None:
     print(f"{tag} 之前的 migration 沒有被動到")
 
 
-def check_migration_direction(versions: str, db_revision: str) -> None:
-    """部署前: 主機資料庫的版本必須在要部署的這一版裡。migration 只往前, 所以資料庫比程式新
-    (兩版之間多了 migration) 就不能回滾到這一版。"""
-    if not db_revision:
-        print("資料庫還沒有跑過 migration，放行")
-        return
-    known = set()
-    for path in Path(versions).glob("*.py"):
-        known.update(re.findall(r"^revision[^=]*=\s*['\"]([^'\"]+)['\"]", path.read_text(), re.M))
-    if db_revision in known:
-        print(f"資料庫的版本 {db_revision} 在這一版的 migration 裡，放行")
-        return
-    fail(
-        f"資料庫的版本 {db_revision} 比要部署的這一版新（或兩邊分岔），不能部署。可以：\n"
-        "  - 往前修：修好之後發一個新版本\n"
-        "  - 還原部署前的備份：在主機上 make backup restore db（會失去備份之後的資料）"
-    )
-
-
 def run_api_test() -> None:
     step("api-test")
     quick = ("uv", "run", "--frozen", "pytest", "-q", "-n", "auto")
     sh(*quick, "-m", "not integration", cwd=API, env=EXPORT_ENV)
-    # agent 的 hook 與 make 指令是獨立的小程式, 借用 api 的測試環境執行。
-    for directory in (REPO_ROOT / ".agents/hooks", REPO_ROOT / "tools"):
+    # agent 的 hook、skill 的腳本與 make 指令是獨立的小程式, 借用 api 的測試環境執行。
+    skills = sorted(tests.parent for tests in (REPO_ROOT / ".agents/skills").glob("*/tests"))
+    for directory in (REPO_ROOT / ".agents/hooks", *skills, REPO_ROOT / "tools"):
         config = ("-c", str(directory / "pytest.ini"), "--rootdir", str(directory))
         sh(*quick, *config, str(directory / "tests"), cwd=API)
 
 
-def run_integration(files: list[str]) -> None:
-    step("integration")
+@contextmanager
+def postgres() -> Iterator[dict[str, str]]:
     name = f"check-postgres-{os.getpid()}"
     sh("docker", "run", "-d", "--rm", "--name", name, "-e", "POSTGRES_USER=app",
        "-e", "POSTGRES_PASSWORD=app", "-e", "POSTGRES_DB=app",
@@ -252,15 +236,20 @@ def run_integration(files: list[str]) -> None:
             time.sleep(1)
         else:
             fail("拋棄式的 PostgreSQL 沒有在一分鐘內就緒")
-        env = {**EXPORT_ENV, "POSTGRES_URL": f"postgresql+asyncpg://app:app@127.0.0.1:{port}/app"}
+        yield {**EXPORT_ENV, "POSTGRES_URL": f"postgresql+asyncpg://app:app@127.0.0.1:{port}/app"}
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
+
+
+def run_integration(files: list[str]) -> None:
+    step("integration")
+    with postgres() as env:
         if files:
             sh("uv", "run", "--frozen", "pytest", "-q", *files, cwd=API, env=env)
             return
         sh("uv", "run", "--frozen", "pytest", "-q", "--cov", "--cov-report=term", cwd=API, env=env)
         # 測試跑完資料庫已經在最新的結構上: model 與 migration 有出入就會在這裡失敗。
         sh("uv", "run", "--frozen", "python", "-m", "app.cli", "check-migrations", cwd=API, env=env)
-    finally:
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False)
 
 
 def run_web_test() -> None:
@@ -303,10 +292,7 @@ CHECKS = {
 
 def run(_name: str, args: list[str]) -> None:
     deny_on_production(load_env(required=False), "make check")
-    if len(args) in (2, 3) and args[0] == "migration-direction":
-        # 部署流程在 CI 上呼叫, 不是給人用的, 所以不列在用法裡。
-        check_migration_direction(args[1], args[2] if len(args) == 3 else "")
-    elif args and args[0] == "integration":
+    if args and args[0] == "integration":
         run_integration(args[1:])
     elif len(args) == 1 and args[0] in CHECKS:
         CHECKS[args[0]]()
